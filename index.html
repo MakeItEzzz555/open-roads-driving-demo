@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Open Roads</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #78b7d3; }
+    body { position: relative; }
+    canvas { display: block; width: 100%; height: 100%; }
+    #hud { position: fixed; inset: 0; pointer-events: none; color: #fff; text-shadow: 0 2px 5px #102431; }
+    #brand { position: absolute; top: 22px; left: 26px; letter-spacing: .22em; font-weight: 800; font-size: 13px; opacity: .92; }
+    #readout { position: absolute; top: 51px; left: 26px; font-variant-numeric: tabular-nums; }
+    #speed { font-size: 42px; font-weight: 800; line-height: .94; }
+    #unit { font-size: 11px; letter-spacing: .16em; opacity: .75; margin-left: 3px; }
+    #hint { position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%); padding: 9px 14px; border-radius: 999px; background: rgba(11,28,38,.58); font-size: 12px; letter-spacing: .04em; white-space: nowrap; }
+    #status { position: absolute; top: 24px; right: 26px; text-align: right; font-size: 12px; line-height: 1.6; opacity: .88; }
+    #start { position: fixed; inset: 0; display: grid; place-items: center; background: linear-gradient(135deg, rgba(13,36,49,.72), rgba(32,66,83,.28)); transition: opacity .35s ease; }
+    #start.hidden { opacity: 0; pointer-events: none; }
+    .card { width: min(440px, calc(100vw - 36px)); padding: 32px; border: 1px solid rgba(255,255,255,.22); border-radius: 20px; background: rgba(9,25,34,.76); box-shadow: 0 24px 80px rgba(0,0,0,.28); backdrop-filter: blur(16px); }
+    h1 { margin: 0 0 8px; font-size: 45px; letter-spacing: -.06em; }
+    .subtitle { margin: 0 0 25px; color: #b9d4df; line-height: 1.5; }
+    .keys { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; margin-bottom: 25px; color: #d6e7ec; font-size: 13px; }
+    .keys span { padding: 10px 12px; border-radius: 9px; background: rgba(255,255,255,.08); }
+    button { border: 0; border-radius: 10px; padding: 13px 20px; width: 100%; cursor: pointer; background: #f6ba45; color: #172b33; font-weight: 800; font-size: 15px; }
+    button:hover { background: #ffd36f; }
+  </style>
+</head>
+<body>
+  <div id="hud" aria-hidden="true">
+    <div id="brand">OPEN ROADS // FREE DRIVE</div>
+    <div id="readout"><span id="speed">0</span><span id="unit">KM/H</span></div>
+    <div id="status"><span id="surface">ASPHALT</span><br><span id="coords">0, 0</span></div>
+    <div id="hint">WASD / ARROWS DRIVE &nbsp;·&nbsp; SPACE HANDBRAKE &nbsp;·&nbsp; R RESET &nbsp;·&nbsp; F FULLSCREEN</div>
+  </div>
+  <div id="start">
+    <div class="card">
+      <h1>Open Roads</h1>
+      <p class="subtitle">A small free-drive world. Find your line, build speed, and explore the roads beyond the skyline.</p>
+      <div class="keys"><span><b>W / ↑</b> throttle</span><span><b>S / ↓</b> brake / reverse</span><span><b>A D / ← →</b> steer</span><span><b>SPACE</b> handbrake drift</span></div>
+      <button id="startBtn">START DRIVING</button>
+    </div>
+  </div>
+
+  <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js"}}</script>
+  <script type="module">
+    import * as THREE from 'three';
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x7db8d0);
+    scene.fog = new THREE.Fog(0x7db8d0, 110, 430);
+    const camera = new THREE.PerspectiveCamera(62, innerWidth / innerHeight, .1, 900);
+    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 1.7));
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    document.body.appendChild(renderer.domElement);
+
+    const hemi = new THREE.HemisphereLight(0xd9f3ff, 0x42604b, 2.5); scene.add(hemi);
+    const sun = new THREE.DirectionalLight(0xfff1d0, 3.8); sun.position.set(-80, 130, 70); sun.castShadow = true; sun.shadow.mapSize.set(2048, 2048); sun.shadow.camera.left = -180; sun.shadow.camera.right = 180; sun.shadow.camera.top = 180; sun.shadow.camera.bottom = -180; scene.add(sun);
+    const world = new THREE.Group(); scene.add(world);
+    const colliders = [];
+    const mats = { grass: new THREE.MeshBasicMaterial({ color: 0x5d9561 }), road: new THREE.MeshBasicMaterial({ color: 0x39474c }), curb: new THREE.MeshStandardMaterial({ color: 0x9baba5, roughness: .8 }), line: new THREE.MeshBasicMaterial({ color: 0xd6b75b }), building: new THREE.MeshStandardMaterial({ color: 0xb5c5c4, roughness: .8 }), glass: new THREE.MeshStandardMaterial({ color: 0x193b4d, metalness: .2, roughness: .2 }), tree: new THREE.MeshStandardMaterial({ color: 0x28634b }), trunk: new THREE.MeshStandardMaterial({ color: 0x644a36 }) };
+    const box = (x, y, z, sx, sy, sz, material, solid = false) => { const m = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), material); m.position.set(x, y, z); m.castShadow = m.receiveShadow = true; world.add(m); if (solid) colliders.push({ x, z, hx: sx / 2, hz: sz / 2 }); return m; };
+    const cyl = (x, y, z, r, h, material) => { const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r * 1.05, h, 10), material); m.position.set(x, y, z); m.castShadow = m.receiveShadow = true; world.add(m); return m; };
+    const roadSize = 18, extent = 720;
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(extent, extent), mats.grass);
+    ground.rotation.x = -Math.PI / 2; ground.position.y = -0.08; ground.receiveShadow = true; world.add(ground);
+    for (let p = -300; p <= 300; p += 60) {
+      box(p, -.03, 0, roadSize, .12, extent, mats.road); box(0, -.03, p, extent, .12, roadSize);
+      for (let q = -300; q <= 300; q += 30) { box(p, .045, q, .32, .04, 6, mats.line); box(q, .05, p, 6, .04, .32, mats.line); }
+    }
+    for (let x = -330; x <= 330; x += 30) for (let z = -330; z <= 330; z += 30) {
+      if (Math.abs(x % 60) < 1 || Math.abs(z % 60) < 1 || (Math.abs(x) < 28 && Math.abs(z) < 28)) continue;
+      const h = 7 + Math.abs((x * 13 + z * 7) % 17), w = 10 + Math.abs((x * 5 + z) % 8);
+      if (Math.abs(x) > 300 || Math.abs(z) > 300) { cyl(x, 4, z, 3.5, 8, mats.trunk); cyl(x, 10, z, 8, 14, mats.tree); continue; }
+      box(x, h / 2, z, w, h, w, mats.building, true); box(x, h + 0.25, z, w * .72, .15, w * .72, mats.glass);
+    }
+    // A landmark tower gives the open world a readable destination.
+    cyl(-122, 20, -122, 7, 40, mats.glass); cyl(-122, 42, -122, 13, 4, mats.line); box(-122, 2, -122, 28, 4, 28, mats.building, true);
+
+    const car = new THREE.Group(); car.position.set(0, .65, 12); world.add(car);
+    const body = new THREE.Mesh(new THREE.BoxGeometry(2.4, .58, 4.5), new THREE.MeshStandardMaterial({ color: 0xd94e43, metalness: .35, roughness: .3 })); body.position.y = .55; body.castShadow = true; car.add(body);
+    const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.85, .58, 2.05), mats.glass); cabin.position.set(0, .98, -.25); cabin.castShadow = true; car.add(cabin);
+    const bumper = new THREE.Mesh(new THREE.BoxGeometry(2.25, .2, .18), new THREE.MeshStandardMaterial({ color: 0x22292d, metalness: .5 })); bumper.position.set(0, .38, 2.25); car.add(bumper);
+    const wheels = []; for (const x of [-1.18, 1.18]) for (const z of [-1.5, 1.5]) { const w = new THREE.Mesh(new THREE.CylinderGeometry(.42, .42, .28, 16), new THREE.MeshStandardMaterial({ color: 0x15191b, roughness: 1 })); w.rotation.z = Math.PI / 2; w.position.set(x, .38, z); w.castShadow = true; car.add(w); wheels.push({ mesh: w, front: z < 0 }); }
+    const state = { mode: 'menu', x: 0, z: 12, speed: 0, yaw: 0, steer: 0, handbrake: false, distance: 0, time: 0 };
+    const keys = new Set();
+    addEventListener('keydown', e => { keys.add(e.key.toLowerCase()); if (['arrowup','arrowdown','arrowleft','arrowright',' '].includes(e.key.toLowerCase())) e.preventDefault(); if (e.key.toLowerCase() === 'r') reset(); if (e.key.toLowerCase() === 'f') document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen?.(); });
+    addEventListener('keyup', e => keys.delete(e.key.toLowerCase()));
+    const held = (...k) => k.some(v => keys.has(v));
+    function reset() { state.x = 0; state.z = 12; state.speed = 0; state.yaw = 0; car.position.set(0, .65, 12); car.rotation.y = 0; }
+    function update(dt) {
+      if (state.mode !== 'play') return;
+      const throttle = held('w','arrowup') ? 1 : 0, reverse = held('s','arrowdown') ? 1 : 0;
+      state.handbrake = held(' '); const targetSteer = (held('a','arrowleft') ? 1 : 0) - (held('d','arrowright') ? 1 : 0);
+      state.steer = THREE.MathUtils.damp(state.steer, targetSteer, 8, dt);
+      const grip = state.handbrake ? 1.25 : 4.3;
+      if (throttle) state.speed += 25 * dt; else if (reverse) state.speed -= (state.speed > 0 ? 34 : 12) * dt; else state.speed *= Math.pow(.985, dt * 60);
+      state.speed = THREE.MathUtils.clamp(state.speed, -12, 53);
+      const steerStrength = Math.min(Math.abs(state.speed) / 11, 1) * (state.handbrake ? 1.45 : 1);
+      state.yaw += state.steer * steerStrength * (state.speed >= 0 ? 1 : -1) * 1.75 * dt;
+      if (Math.abs(state.speed) < .05) state.speed = 0;
+      const forward = new THREE.Vector3(Math.sin(state.yaw), 0, Math.cos(state.yaw));
+      const nx = state.x + forward.x * state.speed * dt, nz = state.z + forward.z * state.speed * dt;
+      let blocked = false; for (const c of colliders) if (Math.abs(nx - c.x) < c.hx + 1.25 && Math.abs(nz - c.z) < c.hz + 2.1) blocked = true;
+      if (!blocked) { state.x = nx; state.z = nz; } else state.speed *= -.25;
+      state.distance += Math.abs(state.speed * dt); state.time += dt;
+      car.position.set(state.x, .65, state.z); car.rotation.y = state.yaw;
+      wheels.forEach(({ mesh, front }) => { mesh.rotation.y = front ? state.steer * .35 : 0; mesh.rotation.x -= state.speed * dt * 1.4; });
+      const target = new THREE.Vector3(state.x - forward.x * 9, 5.8, state.z - forward.z * 9); camera.position.lerp(target, 1 - Math.pow(.0008, dt)); camera.lookAt(state.x, 1.1, state.z);
+    }
+    function renderText() { return JSON.stringify({ coordinateSystem: 'x east, z south; y up', mode: state.mode, player: { x: +state.x.toFixed(2), z: +state.z.toFixed(2), speedKmh: +(Math.abs(state.speed) * 3.6).toFixed(1), heading: +state.yaw.toFixed(2), handbrake: state.handbrake }, distanceM: +state.distance.toFixed(1), controls: 'WASD/arrows drive, Space handbrake, R reset, F fullscreen' }); }
+    window.render_game_to_text = renderText;
+    window.advanceTime = ms => { const steps = Math.max(1, Math.round(ms / (1000 / 60))); for (let i = 0; i < steps; i++) update(1 / 60); render(); };
+    function render() { renderer.render(scene, camera); document.querySelector('#speed').textContent = Math.round(Math.abs(state.speed) * 3.6); document.querySelector('#coords').textContent = `${state.x.toFixed(0)}, ${state.z.toFixed(0)}`; document.querySelector('#surface').textContent = state.handbrake ? 'DRIFT' : Math.abs(state.speed) < .1 ? 'IDLE' : 'ASPHALT'; }
+    document.querySelector('#startBtn').addEventListener('click', () => { state.mode = 'play'; document.querySelector('#start').classList.add('hidden'); camera.position.set(0, 6, 22); camera.lookAt(0, 1, 12); render(); });
+    addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
+    camera.position.set(0, 6, 22); camera.lookAt(0, 1, 12); render();
+    let previous = performance.now(); function loop(now) { const dt = Math.min((now - previous) / 1000, .05); previous = now; update(dt); render(); requestAnimationFrame(loop); } requestAnimationFrame(loop);
+  </script>
+</body>
+</html>
