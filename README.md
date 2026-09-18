@@ -9,6 +9,12 @@ A single-page Three.js driving experiment with a generated city, trees, a block-
 - Use Space for handbrake drifting, R to reset, and F to toggle fullscreen.
 - Explore a procedural scene built from geometry rather than bundled model assets.
 
+## Preview
+
+The actual browser driving demo after starting the simulation. Use WASD or arrow keys to drive, Space for the handbrake, and R to reset.
+
+![Driving](docs/screenshots/driving.png)
+
 ## Setup and run
 
 Use a modern browser with WebGL and JavaScript module/import-map support. Three.js 0.161.0 is loaded from jsDelivr, so internet access is required. No Node install or build step is needed.
